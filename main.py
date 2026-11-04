@@ -1,123 +1,97 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import matplotlib.pyplot as plt
-
-from sklearn.datasets import make_classification
+from sklearn.datasets import load_diabetes
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_absolute_error, r2_score
 
-torch.manual_seed(42)
+# ---------- Завдання 1: підготовка даних ----------
+print("Task 1")
+data = load_diabetes()
+X, y = data.data, data.target
 
-
-print("=== Завдання 1 ===")
-t1d = torch.tensor([35.0, 78.0, 175.0])                  # вік, вага, зріст одного клієнта
-t2d = torch.tensor([[35.0, 78.0, 175.0],
-                    [42.0, 90.0, 180.0],
-                    [28.0, 60.0, 165.0]])                # 3 клієнти
-t3d = torch.randn(2, 3, 3)                               # 2 групи по 3 клієнти
-
-print("1D:", t1d.shape, t1d)
-print("2D:", t2d.shape, "\n", t2d)
-print("3D:", t3d.shape, "\n", t3d)
-
-age, weight = t2d[:, 0], t2d[:, 1]
-print("Додавання:", age + weight)
-print("Поелементне множення:", age * weight)
-print("Умовний показник ризику:", age * 0.3 + weight * 0.5)
-
-x = torch.tensor([2.0, 3.0], requires_grad=True)
-y = (x * x).sum()
-print("requires_grad:", x.requires_grad, "| grad_fn:", y.grad_fn)
-y.backward()
-print("grad:", x.grad)
-
-
-X_np, y_np = make_classification(
-    n_samples=100, n_features=5, n_informative=3, n_redundant=0,
-    random_state=42
-)
 X_train, X_test, y_train, y_test = train_test_split(
-    X_np, y_np, test_size=0.2, random_state=42
+    X, y, test_size=0.2, random_state=42
 )
 
 scaler = StandardScaler()
 X_train = scaler.fit_transform(X_train)
 X_test = scaler.transform(X_test)
 
-X_train = torch.tensor(X_train, dtype=torch.float32)
-X_test = torch.tensor(X_test, dtype=torch.float32)
-y_train = torch.tensor(y_train, dtype=torch.float32).view(-1, 1)
-y_test = torch.tensor(y_test, dtype=torch.float32).view(-1, 1)
+print("X_train:", X_train.shape, "X_test:", X_test.shape)
+print("y_train:", y_train.shape, "y_test:", y_test.shape)
 
-n_features = X_train.shape[1]
+X_train_t = torch.tensor(X_train, dtype=torch.float32)
+X_test_t = torch.tensor(X_test, dtype=torch.float32)
+y_train_t = torch.tensor(y_train, dtype=torch.float32).view(-1, 1)
+y_test_t = torch.tensor(y_test, dtype=torch.float32).view(-1, 1)
 
-def accuracy(model, X, y):
+
+# ---------- Завдання 2: модель MLP ----------
+print("Task 2")
+class MLP(nn.Module):
+    def __init__(self, in_features):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_features, 64), nn.ReLU(),
+            nn.Linear(64, 32), nn.ReLU(),
+            nn.Linear(32, 16), nn.ReLU(),
+            nn.Linear(16, 1),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+def train_model(weight_decay, epochs=50, lr=0.001):
+    torch.manual_seed(42)
+    model = MLP(X_train_t.shape[1])
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+    for epoch in range(epochs):
+        model.train()
+        optimizer.zero_grad()
+        loss = criterion(model(X_train_t), y_train_t)
+        loss.backward()
+        optimizer.step()
+        if (epoch + 1) % 10 == 0:
+            print(f"  wd={weight_decay} | epoch {epoch+1}/{epochs} | loss={loss.item():.2f}")
+
+    model.eval()
     with torch.no_grad():
-        pred = (torch.sigmoid(model(X)) > 0.5).float()
-        return (pred == y).float().mean().item()
+        y_pred = model(X_test_t).numpy().flatten()
+    return y_pred
 
 
-print("\n=== Завдання 2 ===")
-torch.manual_seed(42)
-model = nn.Linear(n_features, 1)
-criterion = nn.MSELoss()
-lr = 0.01
+# ---------- Завдання 3: регуляризація ----------
+print("Task 3")
+print("\nБез регуляризації:")
+pred_no_reg = train_model(weight_decay=0.0)
+print("\nЗ регуляризацією (weight_decay=1e-4):")
+pred_reg = train_model(weight_decay=1e-4)
 
-print("Початкові ваги:", model.weight.data.flatten().numpy().round(4),
-      "bias:", round(model.bias.item(), 4))
+results = pd.DataFrame({
+    "Конфігурація": ["Без регуляризації", "З регуляризацією (L2)"],
+    "MAE": [mean_absolute_error(y_test, pred_no_reg), mean_absolute_error(y_test, pred_reg)],
+    "R²": [r2_score(y_test, pred_no_reg), r2_score(y_test, pred_reg)],
+})
+print("\n", results.to_string(index=False))
 
-losses_manual = []
-for epoch in range(20):
-    pred = model(X_train)
-    loss = criterion(pred, y_train)
-    losses_manual.append(loss.item())
-
-    model.zero_grad()
-    loss.backward()
-    with torch.no_grad():
-        for p in model.parameters():
-            p -= lr * p.grad
-
-print("Фінальні ваги:  ", model.weight.data.flatten().numpy().round(4),
-      "bias:", round(model.bias.item(), 4))
-print(f"Loss: {losses_manual[0]:.4f} -> {losses_manual[-1]:.4f}")
-print(f"Accuracy (test): {accuracy(model, X_test, y_test):.2f}")
-
-
-print("\n=== Завдання 3 ===")
-torch.manual_seed(42)
-model_sgd = nn.Linear(n_features, 1)
-optimizer = optim.SGD(model_sgd.parameters(), lr=0.01)
-criterion = nn.MSELoss()
-
-losses_sgd = []
-print(f"{'Епоха':<8}{'Loss(SGD)':<12}")
-for epoch in range(1, 21):
-    pred = model_sgd(X_train)
-    loss = criterion(pred, y_train)
-
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-
-    losses_sgd.append(loss.item())
-    print(f"{epoch:<8}{loss.item():<12.4f}")
-
-print(f"Accuracy (test): {accuracy(model_sgd, X_test, y_test):.2f}")
-
-
-print("\n=== Завдання 4 ===")
-plt.figure(figsize=(8, 5))
-plt.plot(range(1, 21), losses_sgd, marker="o", label="SGD (lr=0.01)")
-plt.plot(range(1, 21), losses_manual, marker="s", linestyle="--", label="Ручне оновлення")
-plt.xlabel("Епоха")
-plt.ylabel("Loss (MSE)")
-plt.title("Залежність втрат від епох")
+# ---------- Завдання 4: scatter-графік ----------
+print("Task 4")
+plt.figure(figsize=(7, 6))
+plt.scatter(y_test, pred_reg, alpha=0.7, label="Передбачення")
+lims = [min(y_test.min(), pred_reg.min()), max(y_test.max(), pred_reg.max())]
+plt.plot(lims, lims, "r--", label="y = x")
+plt.xlabel("Реальні значення (y_test)")
+plt.ylabel("Передбачені значення (y_pred)")
+plt.title("Diabetes HealthRisk: реальні vs передбачені значення")
 plt.legend()
 plt.grid(True)
-plt.savefig("loss_healthrisk.png", dpi=150)
+plt.tight_layout()
+plt.savefig("diabetes_healthrisk_analysis.png", dpi=150)
 plt.show()
-
-print("Фінальні ваги SGD:", model_sgd.weight.data.flatten().numpy().round(4),
-      "bias:", round(model_sgd.bias.item(), 4))
